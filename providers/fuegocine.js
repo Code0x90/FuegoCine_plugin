@@ -75,6 +75,22 @@ function extractHost(url) {
   }
 }
 
+// Google Drive /view URLs are HTML pages, not playable media URLs.
+// Convert recognized file links to Google's download endpoint, matching
+// the handling in the original FuegoCine Kino plugin.
+function normalizeGoogleDriveUrl(url) {
+  if (!url) return { url: '', isDrive: false };
+  let m = /drive\.google\.com\/file\/d\/([^/?#]+)/i.exec(url)
+    || /drive\.google\.com\/open\?[^#]*[?&]id=([^&#]+)/i.exec(url)
+    || /drive\.google\.com\/uc\?[^#]*[?&]id=([^&#]+)/i.exec(url);
+  if (!m) return { url, isDrive: false };
+  const id = m[1];
+  return {
+    url: `https://drive.usercontent.google.com/download?id=${encodeURIComponent(id)}&export=download&confirm=t`,
+    isDrive: true
+  };
+}
+
 function formatLang(langCode) {
   const code = (langCode || '').toLowerCase().trim();
   if (code.includes('lat')) return { label: 'Español Latino', tag: 'LAT' };
@@ -301,8 +317,10 @@ function extractStreamsFromContent(content) {
 
     for (const item of rawLinks) {
       if (!item.url) continue;
-      const resolvedUrl = decodeStreamUrl(item.url);
-      const host = extractHost(resolvedUrl);
+      const decodedUrl = decodeStreamUrl(item.url);
+      const drive = normalizeGoogleDriveUrl(decodedUrl);
+      const resolvedUrl = drive.url;
+      const host = extractHost(decodedUrl);
       const langInfo = formatLang(item.lang);
       const quality = item.quality || 'HD (1080p)';
       const serverName = (item.name || 'Servidor').replace(/✅|AD/g, '').trim();
@@ -313,7 +331,8 @@ function extractStreamsFromContent(content) {
         name: `FuegoCine [${langInfo.tag}]`,
         title,
         url: resolvedUrl,
-        externalUrl: resolvedUrl,
+        externalUrl: decodedUrl,
+        ...(drive.isDrive ? { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36' } } : {}),
         behaviorHints: {
           notWebReady: false,
           bingeGroup: `fuegocine-${item.lang || 'lat'}`
