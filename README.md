@@ -1,4 +1,4 @@
-# FuegoCine para Nuvio 0.2.0
+# FuegoCine para Nuvio 0.3.0
 
 Estructura ajustada al formato de plugins de Nuvio: `manifest.json` raíz con `name`, `version` y `scrapers[]`; el scraper apunta a `providers/fuegocine.js`.
 

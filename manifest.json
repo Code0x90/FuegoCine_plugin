@@ -1,12 +1,12 @@
 {
   "name": "FuegoCine",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "scrapers": [
     {
       "id": "FuegoCine",
       "name": "FuegoCine",
       "description": "Películas y series en español desde FuegoCine.com",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": "FuegoCine Community",
       "supportedTypes": [
         "movie",
