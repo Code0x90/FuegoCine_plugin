@@ -487,62 +487,114 @@ async function resolveNuvioId(tmdbId, mediaType) {
   const type = String(mediaType || '').toLowerCase();
   const tmdbType = (type === 'tv' || type === 'series') ? 'tv' : 'movie';
   const raw = String(tmdbId || '');
-  if (/^tt\d+$/.test(raw)) return { imdbId: raw, titleInfo: null, type: tmdbType };
+  if (/^tt\d+$/.test(raw)) return { imdbId: raw, type: tmdbType };
   if (raw.startsWith('fc:')) return { internalId: raw, type: tmdbType };
   if (!/^\d+$/.test(raw)) return null;
+
+  // Siempre recuperar los títulos de TMDB: si la búsqueda IMDb/Cinemeta no coincide
+  // con el título publicado en Blogger, se usan títulos localizados como alternativa.
+  const titleInfo = { titles: [], year: '' };
+  for (const language of ['es-PE', 'es-ES', 'en-US']) {
+    try {
+      const url = `https://api.themoviedb.org/3/${tmdbType}/${raw}?api_key=${TMDB_API_KEY}&language=${language}`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 FuegoCine-Nuvio/0.3.0' } });
+      if (!res.ok) continue;
+      const d = await res.json();
+      const title = d.title || d.name || '';
+      if (title && !titleInfo.titles.includes(title)) titleInfo.titles.push(title);
+      if (!titleInfo.year) titleInfo.year = String((d.release_date || d.first_air_date || '').slice(0, 4));
+    } catch (_) {}
+  }
+
+  let imdbId = '';
   try {
     const url = `https://api.themoviedb.org/3/${tmdbType}/${raw}/external_ids?api_key=${TMDB_API_KEY}`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 FuegoCine-Nuvio/0.2.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 FuegoCine-Nuvio/0.3.0' } });
     if (res.ok) {
       const data = await res.json();
-      if (data && data.imdb_id) return { imdbId: data.imdb_id, type: tmdbType };
+      imdbId = data && data.imdb_id || '';
     }
   } catch (_) {}
-  // Fallback uses the TMDB title endpoint, then Blogger search directly by the localized title.
-  try {
-    const url = `https://api.themoviedb.org/3/${tmdbType}/${raw}?api_key=${TMDB_API_KEY}&language=es-ES`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 FuegoCine-Nuvio/0.2.0' } });
-    if (res.ok) {
-      const d = await res.json();
-      return { tmdbId: raw, type: tmdbType, titleInfo: { title: d.title || d.name || '', year: String((d.release_date || d.first_air_date || '').slice(0,4)) } };
-    }
-  } catch (_) {}
-  return null;
+
+  return { imdbId: imdbId || null, tmdbId: raw, type: tmdbType, titleInfo };
 }
 
 async function getStreamsNuvio(tmdbId, mediaType, season, episode) {
   try {
     const type = String(mediaType || '').toLowerCase();
-    const resolved = await resolveNuvioId(tmdbId, type);
-    if (!resolved) return [];
-    if (resolved.internalId) return await getStreams(type === 'tv' || type === 'series' ? 'series' : 'movie', resolved.internalId);
     const streamType = (type === 'tv' || type === 'series') ? 'series' : 'movie';
+    const resolved = await resolveNuvioId(tmdbId, type);
+    if (!resolved) {
+      console.warn('[FuegoCine:Nuvio] No se pudo interpretar el ID recibido');
+      return [];
+    }
+    if (resolved.internalId) {
+      return await getStreams(streamType, resolved.internalId);
+    }
+
+    // Primero intenta el camino IMDb/Cinemeta original, que es el más preciso.
     if (resolved.imdbId) {
-      const contentId = streamType === 'series' ? `${resolved.imdbId}:${Number(season || 1)}:${Number(episode || 1)}` : resolved.imdbId;
-      return await getStreams(streamType, contentId);
+      const contentId = streamType === 'series'
+        ? `${resolved.imdbId}:${Number(season || 1)}:${Number(episode || 1)}`
+        : resolved.imdbId;
+      const streams = await getStreams(streamType, contentId);
+      if (streams.length) {
+        console.log(`[FuegoCine:Nuvio] Encontradas ${streams.length} fuentes mediante IMDb/Cinemeta`);
+        return streams;
+      }
+      console.warn('[FuegoCine:Nuvio] IMDb/Cinemeta no encontró fuentes; probando títulos alternativos de TMDB');
     }
-    // TMDB fallback: try localized title, English title, and title plus year; pick the strongest available result.
-    const title = resolved.titleInfo && resolved.titleInfo.title;
-    if (!title) return [];
-    const year = resolved.titleInfo.year || '';
-    const queries = [title, title.replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g,' ').trim()];
-    if (year) queries.push(`${title} ${year}`);
-    let posts = [];
-    for (const q of [...new Set(queries.filter(Boolean))]) {
-      posts = await fetchPosts({ type: streamType, search: q, limit: 10 });
-      if (posts.length) break;
+
+    // Alternativa: buscar en Blogger por títulos localizados/inglés y elegir el mejor candidato.
+    const info = resolved.titleInfo || {};
+    const titles = Array.isArray(info.titles) ? info.titles : (info.title ? [info.title] : []);
+    const year = info.year || '';
+    const norm = value => String(value || '').normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ').trim();
+    const queries = [];
+    for (const title of titles) {
+      if (!title) continue;
+      queries.push(title);
+      queries.push(title.replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim());
+      if (year) queries.push(`${title} ${year}`);
     }
-    if (!posts.length) return [];
-    const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
-    const wanted = norm(title);
-    posts.sort((a,b) => {
-      const score = p => { const n=norm(p.name); return n===wanted?100:(n.includes(wanted)||wanted.includes(n)?70:0) + (year && String(p.releaseInfo)===year ? 15:0); };
-      return score(b)-score(a);
-    });
-    const postId = extractPostId(posts[0].id);
-    if (!postId) return [];
-    if (streamType === 'series') return await getStreams('series', `fc:series:${postId}:${Number(season || 1)}:${Number(episode || 1)}`);
-    return await getStreams('movie', `fc:movie:${postId}`);
+
+    let candidates = [];
+    const seen = new Set();
+    for (const query of [...new Set(queries.filter(Boolean))]) {
+      const posts = await fetchPosts({ type: streamType, search: query, limit: 10 });
+      for (const post of posts) {
+        const postId = extractPostId(post.id);
+        if (!postId || seen.has(postId)) continue;
+        seen.add(postId);
+        const name = norm(post.name);
+        const wanted = norm(titles[0] || '');
+        let score = 0;
+        for (const title of titles) {
+          const n = norm(title);
+          if (name && n && name === n) score = Math.max(score, 100);
+          else if (name && n && (name.includes(n) || n.includes(name))) score = Math.max(score, 70);
+          else if (name && n && name.split(' ').filter(w => w.length > 2 && n.split(' ').includes(w)).length) score = Math.max(score, 30);
+        }
+        if (year && String(post.releaseInfo || '') === year) score += 15;
+        candidates.push({ post, postId, score });
+      }
+      // No detenerse en la primera consulta: se comparan los títulos alternativos.
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    if (!candidates.length || candidates[0].score < 30) {
+      console.warn(`[FuegoCine:Nuvio] Sin coincidencia en Blogger. Títulos probados: ${titles.join(' | ') || '(ninguno)'}`);
+      return [];
+    }
+
+    const best = candidates[0];
+    console.log(`[FuegoCine:Nuvio] Coincidencia Blogger: "${best.post.name}" (score=${best.score}, post=${best.postId})`);
+    if (streamType === 'series') {
+      return await getStreams('series', `fc:series:${best.postId}:${Number(season || 1)}:${Number(episode || 1)}`);
+    }
+    return await getStreams('movie', `fc:movie:${best.postId}`);
   } catch (e) {
     console.error('[FuegoCine:Nuvio] ' + (e && e.message || e));
     return [];
