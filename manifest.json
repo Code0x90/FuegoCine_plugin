@@ -1,0 +1,10 @@
+{
+  "id": "community.fuegocine.nuvio",
+  "name": "FuegoCine",
+  "version": "0.1.0",
+  "description": "Plugin preliminar de FuegoCine para Nuvio. Extrae fuentes desde las publicaciones de Blogger.",
+  "author": "Community",
+  "resources": ["stream"],
+  "types": ["movie", "series"],
+  "idPrefixes": ["tt", "fc:"]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "fuegocine-nuvio-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Plugin preliminar de FuegoCine para Nuvio",
+  "exports": "./providers/fuegocine.js"
+}
